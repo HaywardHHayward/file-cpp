@@ -93,18 +93,27 @@ int main(const int argc, char* argv[]) {
     return EXIT_SUCCESS;
 }
 
+
+constexpr bool isByteAscii(const unsigned char byte) {
+    return (byte >= 0x07 && byte <= 0x0D) || byte == 0x1B || (byte >= 0x20 && byte <= 0x7E);
+}
+
+constexpr bool isByteLatin1(const unsigned char byte) {
+    return isByteAscii(byte) || byte >= 0xA0;
+}
+
 FileType classifyFile(std::ifstream file) {
     bool isAscii = true, isLatin1 = true, isUtf8 = true;
     while (!file.eof()) {
         unsigned char byte;
         file.get(reinterpret_cast<char&>(byte));
         if (isAscii) {
-            if (byte > 0x7F) {
+            if (!isByteAscii(byte)) {
                 isAscii = false;
             }
         }
         if (isLatin1) {
-            if (byte > 0x7E && byte < 0xA0) {
+            if (!isByteLatin1(byte)) {
                 isLatin1 = false;
             }
         }
