@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
 #include <sstream>
+#include <unordered_map>
+#include <variant>
 #include <vector>
 
 enum class FileType {
