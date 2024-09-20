@@ -20,6 +20,82 @@ enum class ErrorType {
     readError
 };
 
+struct Utf8Sequence {
+    std::uint8_t length;
+    std::vector<unsigned char> bytes;
+
+    explicit Utf8Sequence(const unsigned char byte) {
+        bytes.reserve(4);
+        if (byte < 0b1'0000000) {
+            length = 1;
+        } else if (byte < 0b110'00000) {
+            length = 0;
+            return;
+        } else if (byte < 0b1110'0000) {
+            length = 2;
+        } else if (byte < 0b11110'000) {
+            length = 3;
+        } else if (byte < 0b111110'00) {
+            length = 4;
+        } else {
+            length = 0;
+            return;
+        }
+        bytes.push_back(byte);
+    }
+
+    bool addByte(const unsigned char byte) {
+        if (bytes.size() + 1 > length) {
+            return false;
+        }
+        if (byte >= 0b11'000000) {
+            return false;
+        }
+        bytes.push_back(byte);
+        return true;
+    }
+
+    [[nodiscard]] std::uint32_t getCodepoint() const {
+        std::uint32_t codepoint = 0;
+        switch (length) {
+            case 2:
+                codepoint = bytes[0] ^ 0b110'00000;
+                break;
+            case 3:
+                codepoint = bytes[0] ^ 0b1110'0000;
+                break;
+            case 4:
+                codepoint = bytes[0] ^ 0b1110'0001;
+                break;
+            case 1:
+                codepoint = bytes[0];
+                break;
+            default:
+                return 0x110000;
+        }
+        for (int i = 1; i < bytes.size(); i++) {
+            codepoint = codepoint << 6 | bytes[i] ^ 0b10'000000;
+        }
+        return codepoint;
+    }
+
+    [[nodiscard]] bool isValidCodepoint() const {
+        const std::uint32_t codepoint = getCodepoint();
+        switch (length) {
+            case 1:
+                return codepoint <= 0x7F;
+            case 2:
+                return codepoint > 0x7F && codepoint <= 0x7FF;
+            case 3:
+                return codepoint > 0x7FF && codepoint <= 0xFFFF;
+            case 4:
+                return codepoint > 0xFFFF && codepoint <= 0x10FFFF;
+            default:
+                return false;
+        }
+    }
+};
+
 using FileState = std::variant<FileType, ErrorType>;
 
 FileType classifyFile(std::ifstream file);
@@ -106,6 +182,7 @@ constexpr bool isByteLatin1(const unsigned char byte) {
 
 FileType classifyFile(std::ifstream file) {
     bool isAscii = true, isLatin1 = true, isUtf8 = true;
+    std::optional<Utf8Sequence> sequence = std::nullopt;
     while (!file.eof()) {
         unsigned char byte;
         file.get(reinterpret_cast<char&>(byte));
@@ -120,48 +197,27 @@ FileType classifyFile(std::ifstream file) {
             }
         }
         if (isUtf8) {
-            if (byte >= 0b11111'000) {
-                isUtf8 = false;
-            } else if (byte >= 0b1111'0000) {
-                std::array<unsigned char, 3> bytes{};
-                file.read(reinterpret_cast<char*>(bytes.data()), 3);
-                if (file.gcount() < 3) {
-                    isUtf8 = false;
-                } else {
-                    isUtf8 = std::ranges::none_of(bytes, [&](const unsigned char utfByte) {
-                        return utfByte >= 0b11'000000;
-                    });
-                }
-                if (!isUtf8) {
-                    file.seekg(-file.gcount(), std::ios_base::cur);
-                }
-            } else if (byte >= 0b111'00000) {
-                std::array<unsigned char, 2> bytes{};
-                file.read(reinterpret_cast<char*>(bytes.data()), 2);
-                if (file.gcount() < 2) {
-                    isUtf8 = false;
-                } else {
-                    isUtf8 = std::ranges::none_of(bytes, [&](const unsigned char utfByte) {
-                        return utfByte >= 0b11'000000;
-                    });
-                }
-                if (!isUtf8) {
-                    file.seekg(-file.gcount(), std::ios_base::cur);
-                }
-            } else if (byte >= 0b11'000000) {
-                unsigned char byte2;
-                file.get(reinterpret_cast<char&>(byte2));
-                if (file.gcount() < 1 || byte2 > 0b11'000000) {
+            if (!sequence.has_value()) {
+                sequence = Utf8Sequence(byte);
+                if (sequence->length == 0) {
                     isUtf8 = false;
                 }
-                if (!isUtf8) {
-                    file.seekg(-file.gcount(), std::ios_base::cur);
+            } else if (sequence->bytes.size() < sequence->length) {
+                if (!sequence->addByte(byte)) {
+                    isUtf8 = false;
                 }
+            }
+            if (sequence->length != 0 && sequence->bytes.size() == sequence->length) {
+                isUtf8 = sequence->isValidCodepoint();
+                sequence = std::nullopt;
             }
         }
         if (!isAscii && !isLatin1 && !isUtf8) {
             return FileType::data;
         }
+    }
+    if (sequence.has_value()) { // indicates incomplete utf8
+        isUtf8 = false;
     }
     if (isAscii) {
         return FileType::ascii;
