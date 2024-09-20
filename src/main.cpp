@@ -29,7 +29,7 @@ struct Utf8Sequence {
     explicit Utf8Sequence(const unsigned char byte) {
         bytes.reserve(4);
         length = std::countl_one(byte);
-        if (length == 1 || length > 4) {
+        if (length == 1 || length > 4 || isInvalid(byte)) {
             length = 0;
             return;
         }
@@ -43,11 +43,18 @@ struct Utf8Sequence {
         if (bytes.size() + 1 > length) {
             return false;
         }
-        if (byte >= 0b11'000000) {
+        if (byte >= 0b11'000000 || isInvalid(byte)) {
             return false;
         }
         bytes.push_back(byte);
         return true;
+    }
+
+    static bool isInvalid(const unsigned char byte) {
+        if (byte == 0xC0 || byte == 0xC1 || byte >= 0xF5) {
+            return true;
+        }
+        return false;
     }
 
     [[nodiscard]] std::uint32_t getCodepoint() const {
