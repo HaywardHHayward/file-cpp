@@ -199,9 +199,9 @@ constexpr bool isByteLatin1(const unsigned char byte) {
 FileType classifyFile(std::ifstream file) {
     bool isAscii = true, isLatin1 = true, isUtf8 = true;
     std::optional<Utf8Sequence> sequence = std::nullopt;
-    while (!file.eof()) {
-        unsigned char byte;
-        file.get(reinterpret_cast<char&>(byte));
+    unsigned char byte;
+    file.get(reinterpret_cast<char&>(byte));
+    while (file.good()) {
         if (isAscii) {
             if (!isByteAscii(byte)) {
                 isAscii = false;
@@ -226,6 +226,8 @@ FileType classifyFile(std::ifstream file) {
             if (isUtf8 && sequence->bytes.size() == sequence->length) {
                 if (!sequence->isValidCodepoint()) {
                     isUtf8 = false;
+                } if (sequence->length == 1 && !isByteAscii(sequence->bytes[0])) {
+                    isUtf8 = false;
                 }
                 sequence = std::nullopt;
             }
@@ -233,8 +235,9 @@ FileType classifyFile(std::ifstream file) {
         if (!isAscii && !isLatin1 && !isUtf8) {
             return FileType::data;
         }
+        file.get(reinterpret_cast<char&>(byte));
     }
-    if (sequence.has_value()) {
+    if (isUtf8 && sequence.has_value()) {
         // indicates incomplete utf8
         isUtf8 = false;
     }
