@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bit>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -26,20 +27,13 @@ struct Utf8Sequence {
 
     explicit Utf8Sequence(const unsigned char byte) {
         bytes.reserve(4);
-        if (byte < 0b1'0000000) {
+        length = std::countl_one(byte);
+        if (length == 1 || length > 4) {
+            length = 0;
+            return;
+        }
+        if (length == 0) {
             length = 1;
-        } else if (byte < 0b110'00000) {
-            length = 0;
-            return;
-        } else if (byte < 0b1110'0000) {
-            length = 2;
-        } else if (byte < 0b11110'000) {
-            length = 3;
-        } else if (byte < 0b111110'00) {
-            length = 4;
-        } else {
-            length = 0;
-            return;
         }
         bytes.push_back(byte);
     }
@@ -73,7 +67,10 @@ struct Utf8Sequence {
             default:
                 return 0x110000;
         }
-        for (int i = 1; i < bytes.size(); i++) {
+        if (bytes.size() != length) {
+            return 0x110000;
+        }
+        for (int i = 1; i < length; i++) {
             codepoint = codepoint << 6 | bytes[i] ^ 0b10'000000;
         }
         return codepoint;
@@ -207,8 +204,10 @@ FileType classifyFile(std::ifstream file) {
                     isUtf8 = false;
                 }
             }
-            if (sequence->length != 0 && sequence->bytes.size() == sequence->length) {
-                isUtf8 = sequence->isValidCodepoint();
+            if (isUtf8 && sequence->bytes.size() == sequence->length) {
+                if (!sequence->isValidCodepoint()) {
+                    isUtf8 = false;
+                }
                 sequence = std::nullopt;
             }
         }
@@ -216,7 +215,8 @@ FileType classifyFile(std::ifstream file) {
             return FileType::data;
         }
     }
-    if (sequence.has_value()) { // indicates incomplete utf8
+    if (sequence.has_value()) {
+        // indicates incomplete utf8
         isUtf8 = false;
     }
     if (isAscii) {
