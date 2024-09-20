@@ -6,6 +6,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <variant>
+#include <thread>
 #include <vector>
 
 enum class FileType {
@@ -50,19 +51,18 @@ struct Utf8Sequence {
     }
 
     [[nodiscard]] std::uint32_t getCodepoint() const {
-        std::uint32_t codepoint = 0;
+        std::uint32_t codepoint = bytes[0];
         switch (length) {
             case 2:
-                codepoint = bytes[0] ^ 0b110'00000;
+                codepoint ^= 0b110'00000;
                 break;
             case 3:
-                codepoint = bytes[0] ^ 0b1110'0000;
+                codepoint ^= 0b1110'0000;
                 break;
             case 4:
-                codepoint = bytes[0] ^ 0b1110'0001;
+                codepoint ^= 0b1111'0000;
                 break;
             case 1:
-                codepoint = bytes[0];
                 break;
             default:
                 return 0x110000;
@@ -123,7 +123,7 @@ int main(const int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
     }
-    std::vector<std::ifstream> files;
+    std::vector<std::pair<const std::string, std::ifstream> > files;
     files.reserve(filePaths.size());
     for (const std::filesystem::path& filePath: filePaths) {
         std::ifstream file{filePath, std::ios::binary | std::ios::in};
@@ -131,7 +131,26 @@ int main(const int argc, char* argv[]) {
             fileStates.insert({filePath.generic_string(), FileState{ErrorType::readError}});
             continue;
         }
-        fileStates.insert({filePath.generic_string(), FileState{classifyFile(std::move(file))}});
+        files.emplace_back(filePath.generic_string(), std::move(file));
+    }
+    if (files.size() > 1) {
+        std::mutex mapMutex;
+        std::vector<std::thread> threads;
+        threads.reserve(files.size());
+        for (auto& [name, file]: files) {
+            threads.emplace_back([&] {
+                std::pair<const std::string, FileState> result{name, FileState{classifyFile(std::move(file))}};
+                std::unique_lock lock{mapMutex};
+                fileStates.insert(std::move(result));
+            });
+        }
+        for (std::thread& thread: threads) {
+            thread.join();
+        }
+    } else {
+        for (auto& [name, file]: files) {
+            fileStates.insert({name, FileState{classifyFile(std::move(file))}});
+        }
     }
     for (auto& [path, fileState]: fileStates) {
         std::cout << path << ": ";
