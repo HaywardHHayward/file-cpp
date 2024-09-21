@@ -3,10 +3,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <sstream>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <unordered_map>
 #include <variant>
-#include <thread>
 #include <vector>
 
 enum class FileType {
