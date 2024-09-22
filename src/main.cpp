@@ -29,7 +29,7 @@ struct Utf8Sequence {
 
     explicit Utf8Sequence(const unsigned char byte) {
         bytes.reserve(4);
-        length = std::countl_one(byte);
+        length = static_cast<std::uint8_t>(std::countl_one(byte));
         if (length == 1 || length > 4 || isInvalid(byte)) {
             length = 0;
             return;
@@ -44,7 +44,7 @@ struct Utf8Sequence {
         if (bytes.size() + 1 > length) {
             return false;
         }
-        if (byte >= 0b11'000000 || isInvalid(byte)) {
+        if (byte >= 0b1100'0000 || isInvalid(byte)) {
             return false;
         }
         bytes.push_back(byte);
@@ -62,7 +62,7 @@ struct Utf8Sequence {
         std::uint32_t codepoint = bytes[0];
         switch (length) {
             case 2:
-                codepoint ^= 0b110'00000;
+                codepoint ^= 0b1100'0000;
                 break;
             case 3:
                 codepoint ^= 0b1110'0000;
@@ -79,7 +79,7 @@ struct Utf8Sequence {
             return 0x110000;
         }
         for (int i = 1; i < length; i++) {
-            codepoint = codepoint << 6 | bytes[i] ^ 0b10'000000;
+            codepoint = codepoint << 6 | bytes[i] ^ 0b1000'0000;
         }
         return codepoint;
     }
@@ -118,11 +118,11 @@ int main(const int argc, char* argv[]) {
         try {
             std::filesystem::path filePath{argv[i]};
             if (!is_regular_file(filePath)) {
-                fileStates.insert({filePath.generic_string(), FileState{ErrorType::doesNotExist}});
+                fileStates.try_emplace(filePath.generic_string(), ErrorType::doesNotExist);
                 continue;
             }
             if (is_empty(filePath)) {
-                fileStates.insert({filePath.generic_string(), FileState{FileType::empty}});
+                fileStates.try_emplace(filePath.generic_string(), FileType::empty);
                 continue;
             }
             filePaths.push_back(std::move(filePath));
@@ -136,7 +136,7 @@ int main(const int argc, char* argv[]) {
     for (const std::filesystem::path& filePath: filePaths) {
         std::ifstream file{filePath, std::ios::binary | std::ios::in};
         if (!file.is_open()) {
-            fileStates.insert({filePath.generic_string(), FileState{ErrorType::readError}});
+            fileStates.try_emplace(filePath.generic_string(), ErrorType::readError);
             continue;
         }
         files.emplace_back(filePath.generic_string(), std::move(file));
@@ -157,7 +157,7 @@ int main(const int argc, char* argv[]) {
         }
     } else {
         for (auto& [name, file]: files) {
-            fileStates.insert({name, FileState{classifyFile(std::move(file))}});
+            fileStates.try_emplace(name, classifyFile(std::move(file)));
         }
     }
     for (auto& [path, fileState]: fileStates) {
@@ -205,20 +205,18 @@ constexpr bool isByteLatin1(const unsigned char byte) {
 }
 
 FileType classifyFile(std::ifstream file) {
-    bool isAscii = true, isLatin1 = true, isUtf8 = true;
+    bool isAscii = true;
+    bool isLatin1 = true;
+    bool isUtf8 = true;
     std::optional<Utf8Sequence> sequence = std::nullopt;
     unsigned char byte;
     file.get(reinterpret_cast<char&>(byte));
     while (file.good()) {
-        if (isAscii) {
-            if (!isByteAscii(byte)) {
-                isAscii = false;
-            }
+        if (isAscii && !isByteAscii(byte)) {
+            isAscii = false;
         }
-        if (isLatin1) {
-            if (!isByteLatin1(byte)) {
-                isLatin1 = false;
-            }
+        if (isLatin1 && !isByteLatin1(byte)) {
+            isLatin1 = false;
         }
         if (isUtf8) {
             if (!sequence.has_value()) {
@@ -234,7 +232,8 @@ FileType classifyFile(std::ifstream file) {
             if (isUtf8 && sequence->bytes.size() == sequence->length) {
                 if (!sequence->isValidCodepoint()) {
                     isUtf8 = false;
-                } if (sequence->length == 1 && !isByteAscii(sequence->bytes[0])) {
+                }
+                if (sequence->length == 1 && !isByteAscii(sequence->bytes[0])) {
                     isUtf8 = false;
                 }
                 sequence = std::nullopt;
