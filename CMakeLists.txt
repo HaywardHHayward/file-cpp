@@ -11,4 +11,6 @@ add_executable(file src/main.cpp
         src/vle/unicode.hpp
         src/vle/unicode/Utf8Sequence.cpp
         src/vle/unicode/Utf8Sequence.hpp
+        src/vle/unicode/Utf16Sequence.cpp
+        src/vle/unicode/Utf16Sequence.hpp
 )

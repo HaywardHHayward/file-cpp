@@ -7,7 +7,6 @@
 
 namespace File {
     class GbSequence {
-        using Point = std::uint8_t;
         std::array<std::uint8_t, 4> m_data;
         std::uint8_t m_currentLength;
         bool m_isComplete;
@@ -15,9 +14,14 @@ namespace File {
         GbSequence(std::array<std::uint8_t, 4>&& data, bool isComplete);
 
     public:
+        using Point = std::uint8_t;
+
         static std::optional<GbSequence> build(Point byte);
+
         [[nodiscard]] bool isComplete() const;
+
         bool addPoint(Point point);
+
         [[nodiscard]] bool isValid() const;
     };
 } // File
