@@ -1,7 +1,6 @@
 #ifndef UNICODE_HPP
 #define UNICODE_HPP
 
-#include <cuchar>
 #include <cstdint>
 
 namespace File::Unicode {
@@ -13,7 +12,7 @@ namespace File::Unicode {
                  && 0xA0 > codepoint);
     }
 
-    enum class Endianness {
+    enum class Endianness: std::uint8_t {
         bigEndian,
         littleEndian
     };

@@ -8,15 +8,15 @@
 namespace File {
     class GbSequence {
         std::array<std::uint8_t, 4> m_data;
-        std::uint8_t m_currentLength;
-        bool m_isComplete;
+        std::uint8_t m_currentLength : 3;
+        bool m_isComplete : 1;
 
-        GbSequence(std::array<std::uint8_t, 4>&& data, bool isComplete);
+        GbSequence(std::array<std::uint8_t, 4>&& data, bool isComplete) noexcept;
 
     public:
         using Point = std::uint8_t;
 
-        static std::optional<GbSequence> build(Point byte);
+        static std::optional<GbSequence> build(Point byte) noexcept;
 
         [[nodiscard]] bool isComplete() const;
 

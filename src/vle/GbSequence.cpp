@@ -2,17 +2,17 @@
 
 namespace File {
     GbSequence::GbSequence(std::array<std::uint8_t, 4>&& data,
-                           const bool isComplete) : m_data {data},
-                                                    m_currentLength
+                           const bool isComplete) noexcept: m_data{data},
+                                                            m_currentLength
                                                             {1},
-                                                    m_isComplete
+                                                            m_isComplete
                                                             {isComplete} { }
 
-    std::optional<GbSequence> GbSequence::build(const Point byte) {
+    std::optional<GbSequence> GbSequence::build(const Point byte) noexcept {
         if (byte == 0x80 || byte == 0xFF) {
             return std::nullopt;
         }
-        return GbSequence {{byte, 0, 0, 0}, byte <= 0x7F};
+        return std::make_optional<GbSequence>({{byte, 0, 0, 0}, byte <= 0x7F});
     }
 
     bool GbSequence::isComplete() const {
@@ -47,7 +47,7 @@ namespace File {
     bool GbSequence::isValid() const {
         if (m_isComplete && (m_currentLength == 1)) {
             return (0x08 <= m_data[0] && m_data[0] <= 0x0D) || (m_data[0] == 0x1B) |
-                                                               (0x20 <= m_data[0] && m_data[0] <= 0x7E);
+                   (0x20 <= m_data[0] && m_data[0] <= 0x7E);
         }
         return m_isComplete;
     }

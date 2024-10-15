@@ -26,7 +26,7 @@ static_assert(File::Vle<File::Unicode::Utf16Sequence, std::uint16_t>);
 template<typename Point, File::Vle<Point> T>
 void validateVle(bool& isValid, std::optional<T>& vleSequence, typename T::Point point) {
     if (vleSequence.has_value()) {
-        T& sequence {vleSequence.value()};
+        T& sequence{vleSequence.value()};
         if (!sequence.isComplete() && !sequence.addPoint(point)) {
             isValid = false;
             return;
@@ -40,9 +40,9 @@ void validateVle(bool& isValid, std::optional<T>& vleSequence, typename T::Point
         }
         return;
     }
-    std::optional<T> possibleSequence {T::build(point)};
+    std::optional<T> possibleSequence{T::build(point)};
     if (possibleSequence.has_value()) {
-        T sequence {possibleSequence.value()};
+        T sequence{possibleSequence.value()};
         if (!sequence.isComplete()) {
             vleSequence.emplace(sequence);
             return;
@@ -88,7 +88,7 @@ int main(const int argc, char* argv[]) {
         if (argc <= 1) {
             throw std::invalid_argument("Invalid number of arguments.");
         }
-        std::vector<char*> arguments {};
+        std::vector<char*> arguments{};
         arguments.assign(argv + 1, argv + argc);
         file(std::move(arguments));
     } catch (std::exception& e) {
@@ -104,33 +104,33 @@ void file(std::vector<char*>&& args) {
         return std::filesystem::weakly_canonical(a) == std::filesystem::weakly_canonical(b);
     });
     args.erase(last.begin(), args.end());
-    std::map<std::filesystem::path, FileState> fileStates {};
-    std::mutex fileStateMutex {};
-    std::vector<std::thread> threads {};
+    std::map<std::filesystem::path, FileState> fileStates{};
+    std::mutex fileStateMutex{};
+    std::vector<std::thread> threads{};
     threads.reserve(args.size());
     for (char*& arg: args) {
         threads.emplace_back([&arg, &fileStateMutex, &fileStates] {
-            const std::filesystem::path path {arg, std::filesystem::path::generic_format};
-            std::optional possibleError {findMetadata(path)};
+            const std::filesystem::path path{arg, std::filesystem::path::generic_format};
+            std::optional possibleError{findMetadata(path)};
             if (possibleError.has_value()) {
-                std::lock_guard guard {fileStateMutex};
+                std::lock_guard guard{fileStateMutex};
                 fileStates.emplace(path, *possibleError);
                 return;
             }
-            const std::uintmax_t fileSize {file_size(path)};
+            const std::uintmax_t fileSize{file_size(path)};
             if (fileSize == 0) {
-                std::lock_guard guard {fileStateMutex};
+                std::lock_guard guard{fileStateMutex};
                 fileStates.emplace(path, FileType::empty);
                 return;
             }
-            std::ifstream fileBuffer {path, std::ios::binary};
+            std::ifstream fileBuffer{path, std::ios::binary};
             if (!fileBuffer.is_open()) {
-                std::lock_guard guard {fileStateMutex};
+                std::lock_guard guard{fileStateMutex};
                 fileStates.emplace(path, FileError::unreadable);
                 return;
             }
-            FileState fileState {classifyFile(std::move(fileBuffer))};
-            std::lock_guard guard {fileStateMutex};
+            FileState fileState{classifyFile(std::move(fileBuffer))};
+            std::lock_guard guard{fileStateMutex};
             fileStates.emplace(path, fileState);
         });
     }
@@ -193,14 +193,16 @@ constexpr bool isByteAscii(const std::uint8_t byte) {
 constexpr bool isByteLatin1(const std::uint8_t byte) {
     return isByteAscii(byte) || byte >= 0xA0;
 }
+
 FileState classifyFile(std::ifstream&& fileReader) {
-    bool isAscii {true}, isLatin1 {true}, isUtf8 {true}, isUtf16 {true}, isGb {true};
-    std::optional<File::Unicode::Utf8Sequence> utf8Sequence {std::nullopt};
-    std::optional<File::Unicode::Utf16Sequence> utf16Sequence {std::nullopt};
-    std::optional<File::GbSequence> gbSequence {std::nullopt};
-    std::optional<File::Unicode::Endianness> endianness {std::nullopt};
-    std::array<std::uint8_t, 2> byteBuffer {0, 0};
-    std::uintmax_t bytesRead {0};
+    using namespace File;
+    bool isAscii{true}, isLatin1{true}, isUtf8{true}, isUtf16{true}, isGb{true};
+    std::optional<Unicode::Utf8Sequence> utf8Sequence{std::nullopt};
+    std::optional<Unicode::Utf16Sequence> utf16Sequence{std::nullopt};
+    std::optional<GbSequence> gbSequence{std::nullopt};
+    std::optional<Unicode::Endianness> endianness{std::nullopt};
+    std::array<std::uint8_t, 2> byteBuffer{0, 0};
+    std::uintmax_t bytesRead{0};
     std::uint8_t byte;
     fileReader.get(reinterpret_cast<char&>(byte));
     while (fileReader.good()) {
@@ -214,26 +216,26 @@ FileState classifyFile(std::ifstream&& fileReader) {
                 if (endianness.has_value()) {
                     const std::uint16_t point = [&] {
                         switch (endianness.value()) {
-                            case File::Unicode::Endianness::bigEndian:
+                            case Unicode::Endianness::bigEndian:
                                 return byteBuffer[0] << 8 | byteBuffer[1];
-                            case File::Unicode::Endianness::littleEndian:
+                            case Unicode::Endianness::littleEndian:
                                 return byteBuffer[1] << 8 | byteBuffer[0];
                         }
                         return 0;
                     }();
-                    validateVle<std::uint16_t, File::Unicode::Utf16Sequence>(
-                            isUtf16, utf16Sequence, point);
+                    validateVle<std::uint16_t, Unicode::Utf16Sequence>(
+                        isUtf16, utf16Sequence, point);
                 } else {
-                    const std::uint16_t bigEndian {
-                            static_cast<std::uint16_t>(byteBuffer[0] << 8 | byteBuffer[1])
+                    const std::uint16_t bigEndian{
+                        static_cast<std::uint16_t>(byteBuffer[0] << 8 | byteBuffer[1])
                     };
-                    const std::uint16_t littleEndian {
-                            static_cast<std::uint16_t>(byteBuffer[1] << 8 | byteBuffer[0])
+                    const std::uint16_t littleEndian{
+                        static_cast<std::uint16_t>(byteBuffer[1] << 8 | byteBuffer[0])
                     };
                     if (bigEndian == 0xFEFF) {
-                        endianness = File::Unicode::Endianness::bigEndian;
+                        endianness = Unicode::Endianness::bigEndian;
                     } else if (littleEndian == 0xFEFF) {
-                        endianness = File::Unicode::Endianness::littleEndian;
+                        endianness = Unicode::Endianness::littleEndian;
                     } else {
                         isUtf16 = false;;
                     }
@@ -241,10 +243,10 @@ FileState classifyFile(std::ifstream&& fileReader) {
             }
         }
         if (!isAscii && isUtf8) {
-            validateVle<std::uint8_t, File::Unicode::Utf8Sequence>(isUtf8, utf8Sequence, byte);
+            validateVle<std::uint8_t, Unicode::Utf8Sequence>(isUtf8, utf8Sequence, byte);
         }
         if (!isAscii && isGb) {
-            validateVle<std::uint8_t, File::GbSequence>(isGb, gbSequence, byte);
+            validateVle<std::uint8_t, GbSequence>(isGb, gbSequence, byte);
         }
         if (!isAscii && isLatin1 && !isByteLatin1(byte)) {
             isLatin1 = false;
@@ -284,8 +286,8 @@ FileState classifyFile(std::ifstream&& fileReader) {
 
 std::optional<FileError> findMetadata(const std::filesystem::path& path) noexcept {
     namespace fs = std::filesystem;
-    std::error_code ec {};
-    const fs::file_status metadata {status(path, ec)};
+    std::error_code ec{};
+    const fs::file_status metadata{status(path, ec)};
     if (!status_known(metadata)) {
         return std::make_optional(FileError::metadataError);
     }

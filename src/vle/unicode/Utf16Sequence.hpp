@@ -12,7 +12,6 @@ namespace File::Unicode {
             std::array<uint16_t, 2> data;
             bool isComplete;
         };
-
         using Bmp = std::uint16_t;
         using Utf16Type = std::variant<Bmp, Surrogate>;
 
@@ -25,7 +24,7 @@ namespace File::Unicode {
     public:
         using Point = std::uint16_t;
 
-        static std::optional<Utf16Sequence> build(Point point);
+        [[nodiscard]] static std::optional<Utf16Sequence> build(Point point);
 
         [[nodiscard]] bool isComplete() const;
 
