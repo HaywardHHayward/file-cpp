@@ -3,4 +3,12 @@ project(file)
 
 set(CMAKE_CXX_STANDARD 20)
 
-add_executable(file src/main.cpp)
+
+add_executable(file src/main.cpp
+        src/vle/gbsequence.cpp
+        src/vle/gbsequence.hpp
+        src/vle.hpp
+        src/vle/unicode.hpp
+        src/vle/unicode/Utf8Sequence.cpp
+        src/vle/unicode/Utf8Sequence.hpp
+)
