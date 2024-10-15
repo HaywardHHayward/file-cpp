@@ -1,255 +1,273 @@
 #include <algorithm>
-#include <bit>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
-#include <unordered_map>
 #include <variant>
 #include <vector>
+#include "vle.hpp"
+#include "vle/GbSequence.hpp"
+#include "vle/Unicode.hpp"
+#include "vle/unicode/Utf16Sequence.hpp"
+#include "vle/unicode/Utf8Sequence.hpp"
+
+static_assert(File::Vle<File::GbSequence, std::uint8_t>);
+static_assert(File::Vle<File::Unicode::Utf8Sequence, std::uint8_t>);
+static_assert(File::Vle<File::Unicode::Utf16Sequence, std::uint16_t>);
+
+template<typename Point, File::Vle<Point> T>
+void validateVle(bool& isValid, std::optional<T>& vleSequence, typename T::Point point) {
+    if (vleSequence.has_value()) {
+        T& sequence {vleSequence.value()};
+        if (!sequence.isComplete() && !sequence.addPoint(point)) {
+            isValid = false;
+            return;
+        }
+        if (sequence.isComplete()) {
+            if (!sequence.isValid()) {
+                isValid = false;
+            }
+            vleSequence.reset();
+            return;
+        }
+        return;
+    }
+    std::optional<T> possibleSequence {T::build(point)};
+    if (possibleSequence.has_value()) {
+        T sequence {possibleSequence.value()};
+        if (!sequence.isComplete()) {
+            vleSequence.emplace(sequence);
+            return;
+        }
+        if (!sequence.isValid()) {
+            isValid = false;
+            return;
+        }
+        return;
+    }
+    isValid = false;
+}
 
 enum class FileType {
     empty,
     ascii,
     latin1,
     utf8,
+    utf16,
+    gb,
     data
 };
 
-enum class ErrorType {
+enum class FileError {
+    metadataError,
     doesNotExist,
-    readError
+    invalidPerms,
+    notRegularFile,
+    unreadable,
 };
 
-struct Utf8Sequence {
-    std::uint8_t length;
-    std::vector<unsigned char> bytes;
+using FileState = std::variant<FileType, FileError>;
 
-    explicit Utf8Sequence(const unsigned char byte) {
-        bytes.reserve(4);
-        length = static_cast<std::uint8_t>(std::countl_one(byte));
-        if (length == 1 || length > 4 || isInvalid(byte)) {
-            length = 0;
-            return;
-        }
-        if (length == 0) {
-            length = 1;
-        }
-        bytes.push_back(byte);
-    }
+void file(std::vector<char*>&& args);
 
-    bool addByte(const unsigned char byte) {
-        if (bytes.size() + 1 > length) {
-            return false;
-        }
-        if (byte >= 0b1100'0000 || isInvalid(byte)) {
-            return false;
-        }
-        bytes.push_back(byte);
-        return true;
-    }
+std::optional<FileError> findMetadata(const std::filesystem::path& path) noexcept;
 
-    static bool isInvalid(const unsigned char byte) {
-        if (byte == 0xC0 || byte == 0xC1 || byte >= 0xF5) {
-            return true;
-        }
-        return false;
-    }
 
-    [[nodiscard]] std::uint32_t getCodepoint() const {
-        std::uint32_t codepoint = bytes[0];
-        switch (length) {
-            case 2:
-                codepoint ^= 0b1100'0000;
-                break;
-            case 3:
-                codepoint ^= 0b1110'0000;
-                break;
-            case 4:
-                codepoint ^= 0b1111'0000;
-                break;
-            case 1:
-                break;
-            default:
-                return 0x110000;
-        }
-        if (bytes.size() != length) {
-            return 0x110000;
-        }
-        for (int i = 1; i < length; i++) {
-            codepoint = codepoint << 6 | bytes[i] ^ 0b1000'0000;
-        }
-        return codepoint;
-    }
-
-    [[nodiscard]] bool isValidCodepoint() const {
-        const std::uint32_t codepoint = getCodepoint();
-        switch (length) {
-            case 1:
-                return codepoint <= 0x7F;
-            case 2:
-                return codepoint > 0x7F && codepoint <= 0x7FF;
-            case 3:
-                return codepoint > 0x7FF && codepoint <= 0xFFFF;
-            case 4:
-                return codepoint > 0xFFFF && codepoint <= 0x10FFFF;
-            default:
-                return false;
-        }
-    }
-};
-
-using FileState = std::variant<FileType, ErrorType>;
-
-FileType classifyFile(std::ifstream file);
+FileState classifyFile(std::ifstream&& fileReader);
 
 int main(const int argc, char* argv[]) {
-    if (argc <= 1) {
-        std::cerr << "Invalid number of arguments. Usage: " << (argc == 1 ? argv[0] : "file") << " [file]" << std::endl;
+    try {
+        if (argc <= 1) {
+            throw std::invalid_argument("Invalid number of arguments.");
+        }
+        std::vector<char*> arguments {};
+        arguments.assign(argv + 1, argv + argc);
+        file(std::move(arguments));
+    } catch (std::exception& e) {
+        std::cerr << e.what() << "Usage: file [files]" << std::endl;
         return EXIT_FAILURE;
     }
-    std::vector<std::filesystem::path> filePaths;
-    filePaths.reserve(argc - 1);
-    std::unordered_map<std::string, FileState> fileStates;
-    fileStates.reserve(argc - 1);
-    for (int i = 1; i < argc; i++) {
-        try {
-            std::filesystem::path filePath{argv[i]};
-            if (!is_regular_file(filePath)) {
-                fileStates.try_emplace(filePath.generic_string(), ErrorType::doesNotExist);
-                continue;
-            }
-            if (is_empty(filePath)) {
-                fileStates.try_emplace(filePath.generic_string(), FileType::empty);
-                continue;
-            }
-            filePaths.push_back(std::move(filePath));
-        } catch (std::exception& e) {
-            std::cerr << e.what() << std::endl;
-            return EXIT_FAILURE;
-        }
-    }
-    std::vector<std::pair<const std::string, std::ifstream> > files;
-    files.reserve(filePaths.size());
-    for (const std::filesystem::path& filePath: filePaths) {
-        std::ifstream file{filePath, std::ios::binary | std::ios::in};
-        if (!file.is_open()) {
-            fileStates.try_emplace(filePath.generic_string(), ErrorType::readError);
-            continue;
-        }
-        files.emplace_back(filePath.generic_string(), std::move(file));
-    }
-    if (files.size() > 1) {
-        std::mutex mapMutex;
-        std::vector<std::thread> threads;
-        threads.reserve(files.size());
-        for (auto& [name, file]: files) {
-            threads.emplace_back([&] {
-                std::pair<const std::string, FileState> result{name, FileState{classifyFile(std::move(file))}};
-                std::unique_lock lock{mapMutex};
-                fileStates.insert(std::move(result));
-            });
-        }
-        for (std::thread& thread: threads) {
-            thread.join();
-        }
-    } else {
-        for (auto& [name, file]: files) {
-            fileStates.try_emplace(name, classifyFile(std::move(file)));
-        }
-    }
-    for (auto& [path, fileState]: fileStates) {
-        std::cout << path << ": ";
-        if (std::holds_alternative<FileType>(fileState)) {
-            switch (std::get<FileType>(fileState)) {
-                case FileType::empty:
-                    std::cout << "empty" << "\n";
-                    break;
-                case FileType::ascii:
-                    std::cout << "ASCII text" << "\n";
-                    break;
-                case FileType::latin1:
-                    std::cout << "ISO 8859-1 text" << "\n";
-                    break;
-                case FileType::utf8:
-                    std::cout << "UTF-8 text" << "\n";
-                    break;
-                case FileType::data:
-                    std::cout << "data" << "\n";
-                    break;
-            }
-        } else {
-            switch (std::get<ErrorType>(fileState)) {
-                case ErrorType::doesNotExist:
-                    std::cout << "does not exist" << "\n";
-                    break;
-                case ErrorType::readError:
-                    std::cout << "read error" << "\n";
-                    break;
-            }
-        }
-    }
-    std::cout.flush();
     return EXIT_SUCCESS;
 }
 
-
-constexpr bool isByteAscii(const unsigned char byte) {
-    return (byte >= 0x07 && byte <= 0x0D) || byte == 0x1B || (byte >= 0x20 && byte <= 0x7E);
+void file(std::vector<char*>&& args) {
+    std::ranges::sort(args);
+    auto last = std::ranges::unique(args, [](const char* a, const char* b) {
+        return std::filesystem::weakly_canonical(a) == std::filesystem::weakly_canonical(b);
+    });
+    args.erase(last.begin(), args.end());
+    std::map<std::filesystem::path, FileState> fileStates {};
+    std::mutex fileStateMutex {};
+    std::vector<std::thread> threads {};
+    threads.reserve(args.size());
+    for (char*& arg: args) {
+        threads.emplace_back([&arg, &fileStateMutex, &fileStates] {
+            const std::filesystem::path path {arg, std::filesystem::path::generic_format};
+            std::optional possibleError {findMetadata(path)};
+            if (possibleError.has_value()) {
+                std::lock_guard guard {fileStateMutex};
+                fileStates.emplace(path, *possibleError);
+                return;
+            }
+            const std::uintmax_t fileSize {file_size(path)};
+            if (fileSize == 0) {
+                std::lock_guard guard {fileStateMutex};
+                fileStates.emplace(path, FileType::empty);
+                return;
+            }
+            std::ifstream fileBuffer {path, std::ios::binary};
+            if (!fileBuffer.is_open()) {
+                std::lock_guard guard {fileStateMutex};
+                fileStates.emplace(path, FileError::unreadable);
+                return;
+            }
+            FileState fileState {classifyFile(std::move(fileBuffer))};
+            std::lock_guard guard {fileStateMutex};
+            fileStates.emplace(path, fileState);
+        });
+    }
+    for (std::thread& thread: threads) {
+        thread.join();
+    }
+    for (auto [path, result]: fileStates) {
+        std::string message;
+        if (std::holds_alternative<FileType>(result)) {
+            switch (std::get<FileType>(result)) {
+                case FileType::empty:
+                    message = "empty";
+                    break;
+                case FileType::ascii:
+                    message = "ASCII text";
+                    break;
+                case FileType::latin1:
+                    message = "ISO-8859-1 text";
+                    break;
+                case FileType::utf8:
+                    message = "UTF-8 text";
+                    break;
+                case FileType::utf16:
+                    message = "UTF-16 text";
+                    break;
+                case FileType::gb:
+                    message = "GB 18030 text";
+                    break;
+                case FileType::data:
+                    message = "data";
+                    break;
+            }
+        } else {
+            switch (std::get<FileError>(result)) {
+                case FileError::metadataError:
+                    message = "Was unable to check status of file";
+                    break;
+                case FileError::doesNotExist:
+                    message = "File does not exist";
+                    break;
+                case FileError::invalidPerms:
+                    message = "Invalid permissions";
+                    break;
+                case FileError::notRegularFile:
+                    message = "File is not a regular file";
+                    break;
+                case FileError::unreadable:
+                    message = "Lacked read permissions";
+            }
+        }
+        std::cout << path.generic_string() << ": " << message << "\n";
+    }
+    std::flush(std::cout);
 }
 
-constexpr bool isByteLatin1(const unsigned char byte) {
+constexpr bool isByteAscii(const std::uint8_t byte) {
+    return (0x08 <= byte && byte <= 0x0D) || (byte == 0x1B) | (0x20 <= byte && byte <= 0x7E);
+}
+
+constexpr bool isByteLatin1(const std::uint8_t byte) {
     return isByteAscii(byte) || byte >= 0xA0;
 }
-
-FileType classifyFile(std::ifstream file) {
-    bool isAscii = true;
-    bool isLatin1 = true;
-    bool isUtf8 = true;
-    std::optional<Utf8Sequence> sequence = std::nullopt;
-    unsigned char byte;
-    file.get(reinterpret_cast<char&>(byte));
-    while (file.good()) {
+FileState classifyFile(std::ifstream&& fileReader) {
+    bool isAscii {true}, isLatin1 {true}, isUtf8 {true}, isUtf16 {true}, isGb {true};
+    std::optional<File::Unicode::Utf8Sequence> utf8Sequence {std::nullopt};
+    std::optional<File::Unicode::Utf16Sequence> utf16Sequence {std::nullopt};
+    std::optional<File::GbSequence> gbSequence {std::nullopt};
+    std::optional<File::Unicode::Endianness> endianness {std::nullopt};
+    std::array<std::uint8_t, 2> byteBuffer {0, 0};
+    std::uintmax_t bytesRead {0};
+    std::uint8_t byte;
+    fileReader.get(reinterpret_cast<char&>(byte));
+    while (fileReader.good()) {
+        bytesRead++;
         if (isAscii && !isByteAscii(byte)) {
             isAscii = false;
         }
-        if (isLatin1 && !isByteLatin1(byte)) {
+        if (!isAscii && isUtf16) {
+            byteBuffer[(bytesRead - 1) % 2] = byte;
+            if (bytesRead % 2 == 0) {
+                if (endianness.has_value()) {
+                    const std::uint16_t point = [&] {
+                        switch (endianness.value()) {
+                            case File::Unicode::Endianness::bigEndian:
+                                return byteBuffer[0] << 8 | byteBuffer[1];
+                            case File::Unicode::Endianness::littleEndian:
+                                return byteBuffer[1] << 8 | byteBuffer[0];
+                        }
+                        return 0;
+                    }();
+                    validateVle<std::uint16_t, File::Unicode::Utf16Sequence>(
+                            isUtf16, utf16Sequence, point);
+                } else {
+                    const std::uint16_t bigEndian {
+                            static_cast<std::uint16_t>(byteBuffer[0] << 8 | byteBuffer[1])
+                    };
+                    const std::uint16_t littleEndian {
+                            static_cast<std::uint16_t>(byteBuffer[1] << 8 | byteBuffer[0])
+                    };
+                    if (bigEndian == 0xFEFF) {
+                        endianness = File::Unicode::Endianness::bigEndian;
+                    } else if (littleEndian == 0xFEFF) {
+                        endianness = File::Unicode::Endianness::littleEndian;
+                    } else {
+                        isUtf16 = false;;
+                    }
+                }
+            }
+        }
+        if (!isAscii && isUtf8) {
+            validateVle<std::uint8_t, File::Unicode::Utf8Sequence>(isUtf8, utf8Sequence, byte);
+        }
+        if (!isAscii && isGb) {
+            validateVle<std::uint8_t, File::GbSequence>(isGb, gbSequence, byte);
+        }
+        if (!isAscii && isLatin1 && !isByteLatin1(byte)) {
             isLatin1 = false;
         }
-        if (isUtf8) {
-            if (!sequence.has_value()) {
-                sequence = Utf8Sequence(byte);
-                if (sequence->length == 0) {
-                    isUtf8 = false;
-                }
-            } else if (sequence->bytes.size() < sequence->length) {
-                if (!sequence->addByte(byte)) {
-                    isUtf8 = false;
-                }
-            }
-            if (isUtf8 && sequence->bytes.size() == sequence->length) {
-                if (!sequence->isValidCodepoint()) {
-                    isUtf8 = false;
-                }
-                if (sequence->length == 1 && !isByteAscii(sequence->bytes[0])) {
-                    isUtf8 = false;
-                }
-                sequence = std::nullopt;
-            }
-        }
-        if (!isAscii && !isLatin1 && !isUtf8) {
+        if (!isAscii && !isUtf16 && !isUtf8 && !isGb && !isLatin1) {
             return FileType::data;
         }
-        file.get(reinterpret_cast<char&>(byte));
+        fileReader.get(reinterpret_cast<char&>(byte));
     }
-    if (isUtf8 && sequence.has_value()) {
-        // indicates incomplete utf8
+    if (utf16Sequence.has_value()) {
+        isUtf16 = false;
+    }
+    if (utf8Sequence.has_value()) {
         isUtf8 = false;
+    }
+    if (gbSequence.has_value()) {
+        isGb = false;
     }
     if (isAscii) {
         return FileType::ascii;
+    }
+    if (isUtf16) {
+        return FileType::utf16;
     }
     if (isUtf8) {
         return FileType::utf8;
@@ -257,5 +275,34 @@ FileType classifyFile(std::ifstream file) {
     if (isLatin1) {
         return FileType::latin1;
     }
+    if (isGb) {
+        return FileType::gb;
+    }
     return FileType::data;
 }
+
+
+std::optional<FileError> findMetadata(const std::filesystem::path& path) noexcept {
+    namespace fs = std::filesystem;
+    std::error_code ec {};
+    const fs::file_status metadata {status(path, ec)};
+    if (!status_known(metadata)) {
+        return std::make_optional(FileError::metadataError);
+    }
+    if (!exists(metadata)) {
+        return std::make_optional(FileError::doesNotExist);
+    }
+    if (metadata.type() == fs::file_type::unknown) {
+        return std::make_optional(FileError::invalidPerms);
+    }
+    if (!is_regular_file(metadata)) {
+        return std::make_optional(FileError::notRegularFile);
+    }
+    if ((metadata.permissions() & (fs::perms::owner_read | fs::perms::group_read |
+                                   fs::perms::others_read)) ==
+        fs::perms::none) {
+        return std::make_optional(FileError::unreadable);
+    }
+    return std::nullopt;
+}
+
