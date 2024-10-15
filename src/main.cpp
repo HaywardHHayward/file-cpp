@@ -80,6 +80,7 @@ void file(std::vector<char*>&& args);
 
 std::optional<FileError> findMetadata(const std::filesystem::path& path) noexcept;
 
+
 FileState classifyFile(std::ifstream&& fileReader);
 
 int main(const int argc, char* argv[]) {
@@ -192,7 +193,6 @@ constexpr bool isByteAscii(const std::uint8_t byte) {
 constexpr bool isByteLatin1(const std::uint8_t byte) {
     return isByteAscii(byte) || byte >= 0xA0;
 }
-
 FileState classifyFile(std::ifstream&& fileReader) {
     bool isAscii {true}, isLatin1 {true}, isUtf8 {true}, isUtf16 {true}, isGb {true};
     std::optional<File::Unicode::Utf8Sequence> utf8Sequence {std::nullopt};
